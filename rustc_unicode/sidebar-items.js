@@ -1,0 +1,1 @@
+initSidebarItems({"mod":[["char","A Unicode scalar value"],["derived_property",""],["str",""]]});
