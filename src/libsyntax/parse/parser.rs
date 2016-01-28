@@ -19,9 +19,10 @@ use ast::{BiBitAnd, BiBitOr, BiBitXor, BiRem, BiLt, Block};
 use ast::{BlockCheckMode, CaptureByRef, CaptureByValue, CaptureClause};
 use ast::{Constness, ConstTraitItem, Crate, CrateConfig};
 use ast::{Decl, DeclItem, DeclLocal, DefaultBlock, DefaultReturn};
+use ast::{DoStmtBind, DoStmtThen, DoStmtDecl};
 use ast::{UnDeref, BiDiv, EMPTY_CTXT, EnumDef, ExplicitSelf};
 use ast::{Expr, Expr_, ExprAddrOf, ExprMatch, ExprAgain};
-use ast::{ExprAssign, ExprAssignOp, ExprBinary, ExprBlock, ExprBox};
+use ast::{ExprAssign, ExprAssignOp, ExprBinary, ExprBlock, ExprBox, ExprDo};
 use ast::{ExprBreak, ExprCall, ExprCast, ExprInPlace};
 use ast::{ExprField, ExprTupField, ExprClosure, ExprIf, ExprIfLet, ExprIndex};
 use ast::{ExprLit, ExprLoop, ExprMac, ExprRange};
@@ -2214,6 +2215,9 @@ impl<'a> Parser<'a> {
                         UnsafeBlock(ast::UserProvided),
                         attrs);
                 }
+                if self.eat_keyword(keywords::Do) {
+                    return self.parse_do_block_expr(lo, attrs);
+                }
                 if self.eat_keyword(keywords::Return) {
                     if self.token.can_begin_expr() {
                         let e = try!(self.parse_expr());
@@ -2335,6 +2339,120 @@ impl<'a> Parser<'a> {
 
         let blk = try!(self.parse_block_tail(lo, blk_mode));
         return Ok(self.mk_expr(blk.span.lo, blk.span.hi, ExprBlock(blk), attrs));
+    }
+
+    /// Parse a do-block
+    pub fn parse_do_block_expr(&mut self, lo: BytePos,
+                               attrs: ThinAttributes)
+                            -> PResult<'a, P<Expr>> {
+        let outer_attrs = attrs;
+        try!(self.expect(&token::OpenDelim(token::Brace)));
+
+        let inner_attrs = try!(self.parse_inner_attributes()).into_thin_attrs();
+        let attrs = outer_attrs.append(inner_attrs);
+
+        let blk = try!(self.parse_do_block_tail(lo));
+        Ok(self.mk_expr(blk.span.lo, blk.span.hi, ExprDo(blk), attrs))
+    }
+
+    /// Parses the rest of the do-block
+    pub fn parse_do_block_tail(&mut self, lo: BytePos) -> PResult<'a, P<ast::DoBlock>> {
+        let mut stmts = vec![];
+
+        while !self.eat(&token::CloseDelim(token::Brace)) {
+            if self.eat(&token::At) {
+                // This is just a placeholder for binding to not make it too hard
+                // to differentiate exprs, let-statements and bind
+                let lo = self.span.lo;
+                let pat = try!(self.parse_pat());
+
+                let mut ty = None;
+                if self.eat(&token::Colon) {
+                    ty = Some(try!(self.parse_ty_sum()));
+                }
+
+                try!(self.expect(&token::Eq));
+
+                stmts.push(spanned(lo,
+                                     self.last_span.hi,
+                                     DoStmtBind(try!(self.parse_expr()), pat, ty, ast::DUMMY_NODE_ID)));
+            } else {
+                // Just a normal statement, append to current stack without increasing
+                // level
+                let Spanned {node, span} = if let Some(s) = try!(self.parse_stmt_()) {
+                    s
+                } else {
+                    continue;
+                };
+                match node {
+                    StmtExpr(e, n) => {
+                        // expression without semicolon
+                        // must terminate do-block
+                        if classify::expr_requires_semi_to_be_stmt(&*e) {
+                            // Just check for errors and recover; do not eat semicolon yet.
+                            try!(self.commit_stmt(&[],
+                                             &[token::Semi, token::CloseDelim(token::Brace)]));
+                        }
+
+                        match self.token {
+                            token::Semi => {
+                                self.bump();
+                                //stmts.push((P(spanned(span.lo, self.last_span.hi, *e)), None));
+                                stmts.push(spanned(span.lo, self.last_span.hi, DoStmtThen(e, n)));
+                            }
+                            //token::CloseDelim(token::Brace) => {
+                            //    stmts.push((P(spanned(span.lo, span.hi, e)), None));
+                            //},
+                            _ => {
+                                //stmts.push((P(spanned(span.lo, span.hi, *e)), None));
+                                stmts.push(spanned(span.lo, span.hi, DoStmtThen(e, n)));
+                            }
+                        }
+                    },
+                    StmtSemi(e, n) => {
+                        stmts.push(spanned(span.lo, span.hi, DoStmtThen(e, n)));
+                    },
+                    StmtMac(_, _, _) => {
+                        panic!("parse_do_block_expr: statements do not yet support macros");
+                    },
+                    StmtDecl(d, n) => {
+                        stmts.push(spanned(span.lo, span.hi, DoStmtDecl(d, n)));
+                    }
+                    /*_ => { // all other kinds of statements:
+                        let mut hi = span.hi;
+                        if classify::stmt_ends_with_semi(&node) {
+                            try!(self.commit_stmt_expecting(token::Semi));
+                            hi = self.last_span.hi;
+                        }
+
+                        stmts.push((self.mk_expr(span.lo,
+                                                 span.hi,
+                                                 node,
+                                                 attrs), None));
+                    }*/
+                }
+            }
+        }
+
+        if stmts.is_empty() {
+            self.span_err(mk_sp(lo, self.last_span.hi),
+                          "do-block cannot be empty");
+        }
+
+        if let Some(s) = stmts.last() {
+            match *s {
+                Spanned{ node: DoStmtThen(_, _), span: _} => {},
+                Spanned{ node: _, span} => {
+                    self.span_err(span, "last line of a do-block must be an expression");
+                }
+            }
+        }
+
+        Ok(P(ast::DoBlock {
+            span:  mk_sp(lo, self.last_span.hi),
+            id:    ast::DUMMY_NODE_ID,
+            stmts: stmts.into_iter().map(P).collect(),
+        }))
     }
 
     /// parse a.b or a(13) or a[4] or just a

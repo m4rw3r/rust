@@ -62,6 +62,8 @@ pub trait Visitor<'v> : Sized {
     fn visit_local(&mut self, l: &'v Local) { walk_local(self, l) }
     fn visit_block(&mut self, b: &'v Block) { walk_block(self, b) }
     fn visit_stmt(&mut self, s: &'v Stmt) { walk_stmt(self, s) }
+    fn visit_do_block(&mut self, b: &'v DoBlock) { walk_do_block(self, b) }
+    fn visit_do_stmt(&mut self, s: &'v DoStmt) { walk_do_stmt(self, s) }
     fn visit_arm(&mut self, a: &'v Arm) { walk_arm(self, a) }
     fn visit_pat(&mut self, p: &'v Pat) { walk_pat(self, p) }
     fn visit_decl(&mut self, d: &'v Decl) { walk_decl(self, d) }
@@ -638,6 +640,22 @@ pub fn walk_stmt<'v, V: Visitor<'v>>(visitor: &mut V, statement: &'v Stmt) {
     }
 }
 
+pub fn walk_do_block<'v, V: Visitor<'v>>(visitor: &mut V, block: &'v DoBlock) {
+    walk_list!(visitor, visit_do_stmt, &block.stmts);
+}
+
+pub fn walk_do_stmt<'v, V: Visitor<'v>>(visitor: &mut V, statement: &'v DoStmt) {
+    match statement.node {
+        DoStmtBind(ref expr, ref pat, ref ty, _) => {
+            visitor.visit_pat(pat);
+            walk_list!(visitor, visit_ty, ty);
+            visitor.visit_expr(expr);
+        },
+        DoStmtDecl(ref decl, _) => visitor.visit_decl(decl),
+        DoStmtThen(ref expr, _) => visitor.visit_expr(expr),
+    }
+}
+
 pub fn walk_decl<'v, V: Visitor<'v>>(visitor: &mut V, declaration: &'v Decl) {
     match declaration.node {
         DeclLocal(ref local) => visitor.visit_local(local),
@@ -789,6 +807,9 @@ pub fn walk_expr<'v, V: Visitor<'v>>(visitor: &mut V, expression: &'v Expr) {
             for output in &ia.outputs {
                 visitor.visit_expr(&output.expr)
             }
+        },
+        ExprDo(ref blk) => {
+            visitor.visit_do_block(blk)
         }
     }
 

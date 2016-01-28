@@ -1525,6 +1525,8 @@ pub fn lower_expr(lctx: &LoweringContext, e: &Expr) -> P<hir::Expr> {
             }
 
             ExprMac(_) => panic!("Shouldn't exist here"),
+
+            ExprDo(_) => panic!("ExprDo should not be present in lowering"),
         },
         span: e.span,
         attrs: e.attrs.clone(),

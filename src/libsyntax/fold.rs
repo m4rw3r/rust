@@ -91,8 +91,16 @@ pub trait Folder : Sized {
         noop_fold_block(b, self)
     }
 
+    fn fold_do(&mut self, b: P<DoBlock>) -> P<DoBlock> {
+        noop_fold_do_block(b, self)
+    }
+
     fn fold_stmt(&mut self, s: P<Stmt>) -> SmallVector<P<Stmt>> {
         s.and_then(|s| noop_fold_stmt(s, self))
+    }
+
+    fn fold_do_stmt(&mut self, s: P<DoStmt>) -> SmallVector<P<DoStmt>> {
+        s.and_then(|s| noop_fold_do_stmt(s, self))
     }
 
     fn fold_arm(&mut self, a: Arm) -> Arm {
@@ -890,6 +898,14 @@ pub fn noop_fold_block<T: Folder>(b: P<Block>, folder: &mut T) -> P<Block> {
     })
 }
 
+pub fn noop_fold_do_block<T: Folder>(b: P<DoBlock>, folder: &mut T) -> P<DoBlock> {
+    b.map(|DoBlock {span, id, stmts}| DoBlock {
+        span: folder.new_span(span),
+        id: folder.new_id(id),
+        stmts: stmts.move_flat_map(|s| folder.fold_do_stmt(s).into_iter()),
+    })
+}
+
 pub fn noop_fold_item_underscore<T: Folder>(i: Item_, folder: &mut T) -> Item_ {
     match i {
         ItemExternCrate(string) => ItemExternCrate(string),
@@ -1328,7 +1344,8 @@ pub fn noop_fold_expr<T: Folder>(Expr {id, node, span, attrs}: Expr, folder: &mu
                         fields.move_map(|x| folder.fold_field(x)),
                         maybe_expr.map(|x| folder.fold_expr(x)))
             },
-            ExprParen(ex) => ExprParen(folder.fold_expr(ex))
+            ExprParen(ex) => ExprParen(folder.fold_expr(ex)),
+            ExprDo(blk) => ExprDo(folder.fold_do(blk)),
         },
         span: folder.new_span(span),
         attrs: attrs.map_thin_attrs(|v| fold_attrs(v, folder)),
@@ -1382,6 +1399,42 @@ pub fn noop_fold_stmt<T: Folder>(Spanned {node, span}: Stmt, folder: &mut T)
                           attrs.map_thin_attrs(|v| fold_attrs(v, folder))),
             span: span
         }))
+    }
+}
+
+pub fn noop_fold_do_stmt<T: Folder>(Spanned {node, span}: DoStmt, folder: &mut T)
+                                 -> SmallVector<P<DoStmt>> {
+    let span = folder.new_span(span);
+    match node {
+        DoStmtDecl(d, id) => {
+            let id = folder.new_id(id);
+            folder.fold_decl(d).into_iter().map(|d| P(Spanned {
+                node: DoStmtDecl(d, id),
+                span: span
+            })).collect()
+        },
+        DoStmtThen(e, id) => {
+            let id = folder.new_id(id);
+            if let Some(e) = folder.fold_opt_expr(e) {
+                SmallVector::one(P(Spanned {
+                    node: DoStmtThen(e, id),
+                    span: span
+                }))
+            } else {
+                SmallVector::zero()
+            }
+        },
+        DoStmtBind(e, pat, ty, id) => {
+            let id = folder.new_id(id);
+            if let Some(e) = folder.fold_opt_expr(e) {
+                SmallVector::one(P(Spanned {
+                    node: DoStmtBind(e, folder.fold_pat(pat), ty.map(|t| folder.fold_ty(t)), id),
+                    span: span
+                }))
+            } else {
+                SmallVector::zero()
+            }
+        }
     }
 }
 

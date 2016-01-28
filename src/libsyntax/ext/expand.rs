@@ -160,6 +160,108 @@ pub fn expand_expr(e: P<ast::Expr>, fld: &mut MacroExpander) -> P<ast::Expr> {
                         attrs: fold_thin_attrs(attrs, fld)})
         }
 
+        // desugar do notation
+        ast::ExprDo(block) => {
+            // move out of P<_>
+            let blk = block.and_then(|blk| blk);
+
+            let mut stmts = blk.stmts.into_iter().rev();
+
+            let mk_block = |expr: P<ast::Expr>| {
+                let s = expr.span;
+
+                Block {
+                    stmts: vec![],
+                    expr:  Some(expr),
+                    id:    ast::DUMMY_NODE_ID,
+                    rules: ast::DefaultBlock,
+                    // What to do with all these spans?
+                    span:  s,
+                }
+            };
+
+            let last = match stmts.next() {
+                Some(p) => match p.and_then(|c| c).node {
+                    ast::DoStmtThen(e, _) => mk_block(e),
+                    _ => unreachable!(),
+                },
+                _ => panic!("empty do-block"),
+            };
+
+            let and_then = Spanned { span: span, node: fld.cx.ident_of("and_then") };
+
+            let b = stmts.fold(last, |next_block, stmt| {
+                let mk_closure = |source: P<ast::Expr>, next: ast::Block, pat, ty: Option<P<ast::Ty>>| {
+                    let params  = P(ast::FnDecl {
+                        inputs:   vec![ast::Arg {
+                            ty: ty.unwrap_or_else(|| P(ast::Ty {
+                                id:   ast::DUMMY_NODE_ID,
+                                node: ast::TyInfer,
+                                span: next.span,
+                            })),
+                            pat: pat,
+                            id:  ast::DUMMY_NODE_ID,
+                        }],
+                        output:   ast::DefaultReturn(next.span),
+                        variadic: false
+                    });
+                    let s = next.span;
+
+                    let closure = P(ast::Expr {
+                        id:    ast::DUMMY_NODE_ID,
+                        // TODO: What type of capture?
+                        node:  ast::ExprClosure(ast::CaptureByValue, params, P(next)),
+                        span:  s,
+                        attrs: None,
+                    });
+
+                    let ret = P(ast::Expr {
+                        id: ast::DUMMY_NODE_ID,
+                        span: source.span,
+                        attrs: None,
+                        node: ast::ExprMethodCall(and_then, vec![], vec![source, closure])
+                    });
+
+                    mk_block(ret)
+                };
+
+                match stmt.and_then(|p| p) {
+                    Spanned { span: _, node: ast::DoStmtThen(e, _) } => {
+                        let pat = P(ast::Pat {
+                            id: ast::DUMMY_NODE_ID,
+                            node: ast::PatWild,
+                            span: e.span,
+                        });
+
+                        mk_closure(e, next_block, pat, None)
+                    },
+                    Spanned { span: _, node: ast::DoStmtBind(e, pat, ty, _) } => {
+                        mk_closure(e, next_block, pat, ty)
+                    },
+                    Spanned { span: s, node: ast::DoStmtDecl(decl, n) } => {
+                        let Block { mut stmts, expr: e, .. } = next_block;
+
+                        stmts.insert(0, P(Spanned {
+                            span: s,
+                            node: ast::StmtDecl(decl, n)
+                        }));
+
+                        Block {
+                            stmts: stmts,
+                            expr:  e,
+                            id:    ast::DUMMY_NODE_ID,
+                            rules: ast::DefaultBlock,
+                            // What to do with all these spans?
+                            span:  span,
+                        }
+                    }
+                }
+            });
+
+            P(ast::Expr{id:id, node: ast::ExprBlock(P(b)), span: fld.new_span(span),
+                        attrs: fold_thin_attrs(attrs, fld)})
+        }
+
         _ => {
             P(noop_fold_expr(ast::Expr {
                 id: id,

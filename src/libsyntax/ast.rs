@@ -14,6 +14,7 @@ pub use self::BinOp_::*;
 pub use self::BlockCheckMode::*;
 pub use self::CaptureClause::*;
 pub use self::Decl_::*;
+pub use self::DoStmt_::*;
 pub use self::ExplicitSelf_::*;
 pub use self::Expr_::*;
 pub use self::FloatTy::*;
@@ -544,6 +545,27 @@ pub struct Block {
     pub span: Span,
 }
 
+#[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug)]
+pub struct DoBlock {
+    pub span:  Span,
+    pub id:    NodeId,
+    pub stmts: Vec<P<DoStmt>>,
+}
+
+pub type DoStmt = Spanned<DoStmt_>;
+
+#[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug)]
+pub enum DoStmt_ {
+    /// A bind statement, binding the result of the expression to the
+    /// pattern for the nested block with the optional type
+    DoStmtBind(P<Expr>, P<Pat>, Option<P<Ty>>, NodeId),
+    /// A then statement, executing the expression and then using monadic
+    /// bind with the empty pattern. Can be the last statement of a do-block.
+    DoStmtThen(P<Expr>, NodeId),
+    /// Could be an item or a local (let) binding:
+    DoStmtDecl(P<Decl>, NodeId),
+}
+
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash)]
 pub struct Pat {
     pub id: NodeId,
@@ -1031,7 +1053,9 @@ pub enum Expr_ {
     ExprRepeat(P<Expr>, P<Expr>),
 
     /// No-op: used solely so we can pretty-print faithfully
-    ExprParen(P<Expr>)
+    ExprParen(P<Expr>),
+    /// A do-block desugared to only carry one bind-statement per level
+    ExprDo(P<DoBlock>),
 }
 
 /// The explicit Self type in a "qualified path". The actual

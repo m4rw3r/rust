@@ -334,6 +334,10 @@ impl<'ast> pprust::PpAnn for IdentifiedAnnotation<'ast> {
                 try!(pp::space(&mut s.s));
                 s.synth_comment(format!("pat {}", pat.id))
             }
+            pprust::NodeDoBlock(blk) => {
+                try!(pp::space(&mut s.s));
+                s.synth_comment(format!("do-block {}", blk.id))
+            }
         }
     }
 }

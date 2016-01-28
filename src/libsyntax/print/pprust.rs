@@ -37,6 +37,7 @@ pub enum AnnNode<'a> {
     NodeIdent(&'a ast::Ident),
     NodeName(&'a ast::Name),
     NodeBlock(&'a ast::Block),
+    NodeDoBlock(&'a ast::DoBlock),
     NodeItem(&'a ast::Item),
     NodeSubItem(ast::NodeId),
     NodeExpr(&'a ast::Expr),
@@ -1708,6 +1709,59 @@ impl<'a> State<'a> {
         self.ann.post(self, NodeBlock(blk))
     }
 
+    pub fn print_do_block_with_attrs(&mut self,
+                                     blk: &ast::DoBlock,
+                                     indented: usize,
+                                     attrs: &[ast::Attribute],
+                                     close_box: bool) -> io::Result<()> {
+        try!(self.maybe_print_comment(blk.span.lo));
+        try!(self.ann.pre(self, NodeDoBlock(blk)));
+        try!(self.bopen());
+
+        try!(self.print_inner_attributes(attrs));
+
+        for st in &blk.stmts {
+            try!(self.print_do_stmt(&**st));
+        }
+
+        try!(self.bclose_maybe_open(blk.span, indented, close_box));
+        self.ann.post(self, NodeDoBlock(blk))
+    }
+
+    pub fn print_do_stmt(&mut self, st: &ast::DoStmt) -> io::Result<()> {
+        try!(self.maybe_print_comment(st.span.lo));
+        match st.node {
+            ast::DoStmtDecl(ref decl, _) => {
+                try!(self.print_decl(&**decl));
+                try!(word(&mut self.s, ";"));
+            }
+            ast::DoStmtThen(ref expr, _) => {
+                try!(self.space_if_not_bol());
+                try!(self.print_expr_outer_attr_style(&**expr, false));
+                try!(word(&mut self.s, ";"));
+            }
+            ast::DoStmtBind(ref expr, ref pat, ref ty, _) => {
+                try!(self.maybe_print_comment(st.span.lo));
+                try!(self.space_if_not_bol());
+                try!(self.ibox(INDENT_UNIT));
+                try!(self.word_nbsp("@"));
+
+                try!(self.ibox(INDENT_UNIT));
+                try!(self.print_pat(&*pat));
+                if let Some(ref ty) = *ty {
+                    try!(self.word_space(":"));
+                    try!(self.print_type(&**ty));
+                }
+                try!(self.end());
+                try!(self.nbsp());
+                try!(self.word_space("="));
+                try!(self.print_expr(&**expr));
+                try!(self.end());
+            },
+        }
+        self.maybe_print_trailing_comment(st.span, None)
+    }
+
     fn print_else(&mut self, els: Option<&ast::Expr>) -> io::Result<()> {
         match els {
             Some(_else) => {
@@ -2284,6 +2338,13 @@ impl<'a> State<'a> {
                 try!(self.print_inner_attributes_inline(attrs));
                 try!(self.print_expr(&**e));
                 try!(self.pclose());
+            },
+            ast::ExprDo(ref blk) => {
+                // containing cbox, will be closed by print-block at }
+                try!(self.cbox(INDENT_UNIT));
+                // head-box, will be closed by print-block after {
+                try!(self.ibox(0));
+                try!(self.print_do_block_with_attrs(&**blk, INDENT_UNIT, attrs, true));
             }
         }
         try!(self.ann.post(self, NodeExpr(expr)));
